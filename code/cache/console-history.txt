@@ -1,0 +1,4 @@
+(await deployer.getBalance()).toString();
+const [deployer] = await ethers.getSigners();
+cls
+const [deployer] = await etehrs.getSigners()

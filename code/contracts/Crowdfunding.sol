@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity >=0.5.0 <0.9.0;
+pragma solidity ^0.8.17;
 
 contract Crowdfunding {
     mapping(address => uint256) public contributors;
@@ -18,125 +18,105 @@ contract Crowdfunding {
         uint256 totVoters;
         mapping(address => bool) voters;
     }
+
     mapping(uint256 => Request) public request;
     uint256 public numRequestes;
-    
+
     constructor(uint256 _target, uint256 _seconds) {
+        manager = msg.sender;
         target = _target;
         deadline = block.timestamp + _seconds;
         minContribution = 100 wei;
-        manager = msg.sender;
     }
-/*
-Check the total balance this contract has by calling this function
-*/
+
+    /* ---------------- ETH RECEIVE ---------------- */
+
+    receive() external payable {
+        _contribute();
+    }
+
+    function sendEth() public payable {
+        _contribute();
+    }
+
+    function _contribute() internal {
+        require(block.timestamp < deadline, "Deadline passed");
+        require(msg.value >= minContribution, "Minimum 100 wei required");
+
+        if (contributors[msg.sender] == 0) {
+            totcontributors++;
+        }
+
+        contributors[msg.sender] += msg.value;
+        raisedAmount += msg.value;
+    }
+
+    /* ---------------- VIEW ---------------- */
+
     function getBalance() public view returns (uint256) {
         return address(this).balance;
     }
 
-    modifier checkTime() {
-        require(block.timestamp < deadline, "You have missed the time");
-        _;
-    }
-    modifier checkVal() {
-        require(
-            msg.value >= minContribution,
-            "Minimum contribution is not met"
-        );
-        _;
-    }
-    modifier timeToRefund() {
-        require(
-            block.timestamp > deadline && raisedAmount < target,
-            "You are not able take refund"
-        );
-        _;
-    }
-    modifier timeToPay() {
-        require(
-            block.timestamp > deadline && raisedAmount >= target,
-            "Funds are still coming.."
-        );
-        _;
-    }
+    /* ---------------- MODIFIERS ---------------- */
+
     modifier onlyManager() {
-        require(msg.sender == manager, "Only manager can call this function");
+        require(msg.sender == manager, "Only manager");
         _;
     }
-    modifier checkCont() {
-        require(contributors[msg.sender] > 0, "You are not contributor..");
+
+    modifier onlyContributor() {
+        require(contributors[msg.sender] > 0, "Not contributor");
         _;
     }
-/* 
-First connect your account which has balance and keep in mind that you 
-need to transfer minimum ammount of 1000 wei to be a contributor...
-*/
-    function sendEth() public payable checkTime checkVal {
-        if (contributors[msg.sender] == 0) {
-            totcontributors++;
-        }
-        contributors[msg.sender] += msg.value;
-        raisedAmount += msg.value;
+
+    modifier refundAllowed() {
+        require(block.timestamp > deadline && raisedAmount < target, "Refund not allowed");
+        _;
     }
-/*
-Only Contributors can ask for refund and 
-only when the target is not acheived after the deadline..
-*/
-    function refund() public timeToRefund checkCont {
-        address payable user = payable(msg.sender);
-        uint a = contributors[msg.sender];
+
+    modifier paymentAllowed() {
+        require(block.timestamp > deadline && raisedAmount >= target, "Target not met");
+        _;
+    }
+
+    /* ---------------- REFUND ---------------- */
+
+    function refund() public refundAllowed onlyContributor {
+        uint amount = contributors[msg.sender];
         contributors[msg.sender] = 0;
-        user.transfer(a);
+        payable(msg.sender).transfer(amount);
     }
-/*
-Manager will create request for different recepients...
-*/
+
+    /* ---------------- REQUESTS ---------------- */
+
     function createRequests(
         string memory _description,
-        address payable _recipients,
+        address payable _recipient,
         uint256 _value
     ) public onlyManager {
-        Request storage newRequest = request[numRequestes];
-        numRequestes++;
-        newRequest.description = _description;
-        newRequest.recipient = _recipients;
-        newRequest.value = _value;
-        newRequest.completed = false;
-        newRequest.totVoters = 0;
+        Request storage r = request[numRequestes++];
+        r.description = _description;
+        r.recipient = _recipient;
+        r.value = _value;
+        r.completed = false;
+        r.totVoters = 0;
     }
-/*
-Only contributor can vote to the request and
-only one time contributor can vote...
-*/
-    function voteRequest(uint256 _requestNo) public checkCont {
-        Request storage thisRequest = request[_requestNo];
-        require(
-            thisRequest.value > 0,
-            "This Request does not exist"
-        );
-        require(
-            thisRequest.voters[msg.sender] == false,
-            "You have already voted.."
-        );
-        thisRequest.voters[msg.sender] = true;
-        thisRequest.totVoters++;
-    }
-/*
-Manager will fulfill the request only after deadline
-if the target is achieved otherwise no request would be completed....
-*/
-    function makePay(uint256 _requestNo) public onlyManager timeToPay {
-        Request storage thisRequest = request[_requestNo];
 
-        require(
-            thisRequest.completed == false,
-            "The request has been completed"
-        );
-        require(
-            thisRequest.totVoters > totcontributors / 2,
-            "Majority does not support"
-        );
-        thisRequest.recipient.transfer(thisRequest.value);
-        thisRequest.completed = true;
+    function voteRequest(uint256 _requestNo) public onlyContributor {
+        Request storage r = request[_requestNo];
+        require(!r.voters[msg.sender], "Already voted");
+
+        r.voters[msg.sender] = true;
+        r.totVoters++;
+    }
+
+    function makePay(uint256 _requestNo) public onlyManager paymentAllowed {
+        Request storage r = request[_requestNo];
+
+        require(!r.completed, "Already completed");
+        require(r.totVoters > totcontributors / 2, "Majority not reached");
+
+        r.completed = true;
+        r.recipient.transfer(r.value);
     }
 }
